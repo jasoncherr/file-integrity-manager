@@ -13,39 +13,29 @@ There are three steps in setting up the File Integrity Monitor;
 The -h print help screen is shown below which lists the command line options for the File integrity checker, and also gives an example command line of a one pass hash check.
 
 
-----
+-----------------------------------------------------------------------------------------------
  File Integrity Checker version <1.2> Date:16th July 2019
-------
+-----------------------------------------------------------------------------------------------
   FIMChecker.py <options> <target dir name> OR FIMChecker.py <options>
 
   eg.
-
   FIMChecker.py -q 3 -n -c hashList.txt /git/src
 
  -- Commands --
    -g : Generate a hash list from the passed path.
-
    -c <check file name> : check the hashes of the target files
-
    -mm <n> : Monitor mode - Don't exit repeatedly check hashes. Sleep for
        n seconds.
-
    -i <filename and path> : Set the ignore file.
 
  -- Options --
-
    -q <n> : Level to output Debug string to std out (1 to 10).
-
    -l <n> : Level Log debug outtput to file.
-
    -o <output directory path> : Output directory to put files out to.              
 		Try to create the output directory in the current directory.
 		Otherwise the directory named will be written to.
-
    -m <n> : Set the maximum directory depth to traverse
-
    -n : Set no clobber mode, so output files will not be over written.
-
    -h : print this command line help.
 ---
 
@@ -114,7 +104,7 @@ S fe33aa3ee3c663c095cabaa570ce06412 src//Event/Event.php
 
 S 874939edaa4da237cfac61fd4fdb1522 src/Exception.php
 
-S ab841597061fa200d548ab84c917f7d1 src//Exception/Exception.php
+S ab841597061fa200d548ab84c917f7d1 src/Exception/Exception.php
 
 
 ***Files ignored, are ignored and not hashed or checked. ***
@@ -145,7 +135,7 @@ The following command line shows the FIM script being run in monitor mode, with 
 
 Also note the previously generated hash list input as the** -c **parameter.
 
-$ python ~/git/devops/fim_checker/FIMChecker.py -mm 20 -c hashList.txt directory_name &
+$ python ~/git/FIMChecker.py -mm 20 -c hashList.txt directory_name &
 
 [1] 11846
 
@@ -181,7 +171,7 @@ Unknown File Detected
 
 Detected File Details: 
 
-FileName: git/doc/onboarding/malware.php, MD5 Hash: 1349ea365bba46f46925aa884df94490 
+FileName: git/doc/malware.php, MD5 Hash: 1349ea365bba46f46925aa884df94490 
  
 Error Message: Unknown File
 
