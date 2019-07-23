@@ -1,7 +1,7 @@
 #!/usr/bin/python
-
+#
 ###############################################################################
-#  File Integrity Manager   						      #
+#  File Integrity Manager                                                     #
 # ----------------------------------------------------------------------------#
 #  Jason Cherry 2019.                                                         #
 # ----------------------------------------------------------------------------#  
@@ -17,10 +17,12 @@
 # 
 ###############################################################################
 # Change list                                                                 #
-# Date       		: Who 	: What                                        #
+# Date       		: Who 	: What                                            #
 # -----------------------------------------------------------------------------
-# 16th July 2019	: JC	: Initial version
-#
+# 9th June 2019	    : JC    : Initial version.                                #
+# 16th July 2019    : JC    : Add email to, email from and slack webhook URL  #
+#                             command line options.                           #
+#                             https://api.slack.com/incoming-webhooks         #
 #
 versionG = "1"
 yearG = "16th July 2019"
@@ -35,6 +37,7 @@ import datetime
 import glob
 import base64
 
+import requests
 #import threading	# For threading.
 import inspect 		# For debugging line numbers.
 
@@ -45,6 +48,9 @@ import inspect 		# For debugging line numbers.
 import hashlib 
 import smtplib
 import ssl
+
+import requests, json
+
 from email.mime.text import MIMEText
 
 thisFileNameG = inspect.getframeinfo(inspect.currentframe()).filename
@@ -87,8 +93,51 @@ class GlobalParamsG:
         self.monitorModeM = False
         self.monitorModeSleepM = 600
 
+        self.thisHostM = os.uname()[1]
+
+        self.alertConfigM = None
+
+
 
 paramsG = GlobalParamsG()
+
+
+
+##
+# A class to store the loaded profile.
+#
+class AlertConfig:
+    
+    def __init__(self):
+
+        self.smtpPortM = 0
+
+        self.smtpPasswordM = None
+        self.smtpServerM = None
+        self.senderEmailM = ""
+        self.receiverEmailM = None
+
+        self.slackWebHookM = None
+
+    
+    def DisplayProfile(self):
+            
+        printInfo("SMTP Port      : " + str(self.smtpPortM),1)
+        printInfo("SMTP Password  : " + str(self.smtpPasswordM),1)
+        printInfo("SMTP Server    : " + str(self.smtpServerM),1)
+        printInfo("Sender Email   : " + str(self.senderEmailM),1)
+        printInfo("Reciever Email : " + str(self.receiverEmailM),1)
+        printInfo("",1)
+        printInfo("Slack Web Hook : " + str(self.slackWebHookM),1)
+        printInfo("",1)
+
+
+    def __str__(self):
+
+        return str(self.SMTPportM) + " : " + str(self.smtpPasswordM) + " : " + str(self.smtpServerM) + " : " + str(self.senderEmailM) + " : " + str(self.receiverEmailM) + " : " + str(self.slackWebHookM)
+
+
+
 
 
 def printInfo(stringP, infoLevelP):
@@ -134,18 +183,30 @@ def printDebugNoLock(stringP, debugLevelP):
 def printHelp():
     print("\n")
     print("-------------------------------------------------------------------------- ")
-    print(" -** File Integrity Checker version <" + versionG + ".2> Date:" + yearG + " **-")
+    print(" -** File Integrity Checker version <" + versionG + ".3> Date:" + yearG + " **-")
     print("-------------------------------------------------------------------------- ")
     print("  FIMChecker.py <options> <target dir name> OR FIMChecker.py <options>     ")
     print("  eg.                                                                      ")
-    print("     FIMChecker.py -q 3 -n -c hashList.txt /git/secure_rest                ")
+    print("     FIMChecker.py -n -c hashList.txt /git/src                             ")
+    
     print(" -**- Commands -**-                                                        ")
     print("   -g : Generate a hash list from the passed path.                         ")
     print("   -c <check file name> : check the hashes of the target files             ")
     print("   -mm <n> : Monitor mode - Don't exit repeatedly check hashes. Sleep for  ")
-    print("       n seconds.                                                          ")
+    print("       n seconds. Or use -monitor                                          ")
     print("   -i <filename and path> : Set the ignore file.                           ")
-    print(" -**- Options -**-                                                         ")
+    
+#    print(" -**- Email Options -**-                                                   ")
+#    print("   NYI -et <email to address>                                                  ")
+#    print("   NYI -ef <email from address>                                                ")
+#    print("   NYI -password <email password>                                              ")
+#    print("   NYI -smtp <smtp server name> : default [smtp.gmail.com]                     ")
+#    print("   NYI -port <smtp server port> : default [465]                                ")
+#    #print(" ")
+#    print(" -**- Slack Options -**-                                                   ")
+#    print("   NYI -slack <slack webhook URL>                                              ")
+#
+    print(" --** General Options -**-                                                 ")
     print("   -q <n> : Level to output Debug string to std out (1 to 10).             ")
     print("   -l <n> : Level Log debug outtput to file.                               ")
     print("   -o <output directory path> : Output directory to put files out to.      ")
@@ -367,15 +428,14 @@ def readHashes(pathP):
 
 class OutputFileHelper:
 
-
     def __init__(self):
         self.fileNamePrefixM = None
         self.outputDirM = None
         self.noClobberValueM = 0
         self.outputHashesFileM = None
+        self.alertConfigFileM = None
 
-        self.listOfDefaultPrefixesT = ['hashList']
-
+        self.listOfDefaultPrefixesT = ['hashList','alertconfig']
 
     def setFileNamePrefix(self, fileNamePrefixP):
         self.fileNamePrefixM = fileNamePrefixP
@@ -384,6 +444,9 @@ class OutputFileHelper:
 
         if self.outputHashesFileM != None:
             self.outputHashesFileM.close()
+
+        if self.alertConfigFileM != None:
+            self.alertConfigFileM.close()
 
     def determineFilenamePrefix(self):
 
@@ -411,7 +474,6 @@ class OutputFileHelper:
             printDebugNoLock(lineNum() + outputDirT, 10)
 
         self.outputDirM = outputDirT
-
 
     ##
     # FilenamePrefix must be obtained before this is run.
@@ -455,6 +517,55 @@ class OutputFileHelper:
         printDebugNoLock(lineNum() + "Opening File: " + testT , 4)
 
         self.outputHashesFileM = open(testT, 'w')
+
+
+    def openAlertConfigFile(self):
+
+        testT = os.path.join(os.path.dirname(__file__) + '/' + self.listOfDefaultPrefixesT[1] + '.cfg')
+        
+        printDebugNoLock(lineNum() + "Opening File: " + testT , 2)
+
+        try:
+
+            self.alertConfigFileM = open(testT, 'r')
+        except Exception as extT:
+            printInfo(str(extT), 1)
+
+    def loadAlertConfigFile(self):
+        #print(lineNum())
+        if self.alertConfigFileM != None:
+            dataT = self.alertConfigFileM.readlines()
+
+            #print lineNum(), str(dataT)
+            currentProfileT = None
+            currentProfileT = AlertConfig()
+            for x in dataT:
+                lineT = str.split(x,'=')
+
+                if len(lineT) >= 1:
+                    tagT = str.strip(lineT[0])
+                        
+                    if '[' in tagT:
+                        indexEndT = tagT.find(']')
+                        # We've got a name tag.
+                        # starting a new profile Object.      
+                        continue
+                    elif tagT == 'SMTPPort':
+                        currentProfileT.smtpPortM = int(lineT[1])
+                    elif tagT == 'SMTPPassword':
+                        currentProfileT.smtpPasswordM = str.strip(lineT[1])
+                    elif tagT == 'SMTPServer':
+                        currentProfileT.smtpServerM = str.strip(lineT[1])
+                    elif tagT == 'SenderEmail':
+                        currentProfileT.senderEmailM = str.strip(lineT[1])
+                    elif tagT == 'ReceiverEmail':
+                        currentProfileT.receiverEmailM = str.strip(lineT[1])
+                    elif tagT == 'SlackWebHook':
+                        currentProfileT.slackWebHookM = str.strip(lineT[1])
+
+
+            
+            paramsG.alertConfigM = currentProfileT
 
 
     def openLogFileOld(self):
@@ -636,6 +747,75 @@ def getAndHashFile(fileNameP):
     return returnHashT
 
 ##
+# Send message to slack
+#
+def send_slack_alert(dataP, context=None):
+    
+    webhook_urlT = paramsG.alertConfigM.slackWebHookM
+    printInfo(webhook_urlT,2)
+
+    thisHostT = paramsG.thisHostM      
+
+    printInfo("\033[31;1;1m[-]\033[0m Sending Slack Message...",1)
+
+    slack_dataT = {'text': "Possible File Integrity Compromise Detected on host: " + str(thisHostT), \
+        "attachments":  [ \
+                         { \
+                         "fallback": "", \
+                         "color": "#78281F",\
+                         "pretext": "",\
+                         "author_name": "Data Source: File Integrity Manager",\
+                         "author_link": "",\
+                         "author_icon": "",\
+                         "title": "",\
+                         "title_link": "",\
+                         "text": "",\
+                         "fields": [\
+                                    {\
+                                    "title": "host",\
+                                    "value": str(dataP['host']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
+                                    "title": "message",\
+                                    "value": str(dataP['message']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
+                                    "title": "file properties",\
+                                    "value": str(dataP['fileproperties']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
+                                    "title": "detected file",\
+                                    "value": str(dataP['checkedfile']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
+                                    "title": "error message",\
+                                    "value": str(dataP['error']),\
+                                    "short": "false"\
+                                    }\
+                                    ],\
+                         "ts":  str(time.time())\
+                         }\
+                         ]\
+        }
+
+
+    responseT = requests.post(
+                             webhook_urlT, data=json.dumps(slack_dataT),
+                             headers={'Content-Type': 'application/json'}
+                             )
+
+    if responseT.status_code != 200:
+        raise ValueError(
+                         'Request to slack returned an error %s, the response is:\n%s'
+                         % (responseT.status_code, responseT.text)
+                         )
+
+
+##
 # Pass the full hash
 #
 def getFileNameRecord(fileNameP):
@@ -653,45 +833,58 @@ def getFileNameRecord(fileNameP):
 
 def raiseAlert(filePropertiesP, errorMessageP, checkedFileP = None):
     
-    portT = 465 # for SSL
-    passwordT = 'your_password'
+    portT = paramsG.alertConfigM.smtpPortM # for SSL
+    emailPasswordT = paramsG.alertConfigM.smtpPasswordM
 
     context = ssl.create_default_context()
     
-    smtp_server="smtp.gmail.com"
-    port = 465
-    sender_email="your_email_address@gmail.com"
+    smtp_server=paramsG.alertConfigM.smtpServerM
     
-    thisHostT = os.uname()[1]
+    sender_email=paramsG.alertConfigM.senderEmailM
+    receiver_email=paramsG.alertConfigM.receiverEmailM
+    
+    thisHostT = paramsG.thisHostM
+
+    dataT = {"host":"","message":"",'fileproperties':'','checkedfile':"",'error':""}
 
     printDebugNoLock(lineNum() + str(thisHostT),4)
 
-    server = smtplib.SMTP_SSL(smtp_server,port)
-    #printDebugNoLock(lineNum(),1)
+    dataT['host'] = thisHostT
+    server = smtplib.SMTP_SSL(smtp_server,portT)
+
     try:
+        if paramsG.alertConfigM.senderEmailM != None:
+            server.login(sender_email, emailPasswordT)
 
-        server.login(sender_email, passwordT)
-        #printDebugNoLock(lineNum(),1)
+            message = " Subject: Possible File Integrity Compromise Detected on " + str(thisHostT) + \
+            "\n\n\n"
 
-        message = " Subject: Possible File Integrity Compromise Detected on " + str(thisHostT) + \
-        "\n\n\n"
+            dataT['message'] = message
 
-        if filePropertiesP != None:
-            message += "\nHost: " + str(thisHostT) +"\n" 
-            message += "\nFile Integrity has been compromised.\n" + \
-            "\nModified File Details: " + str(filePropertiesP) + "\n"
+            if filePropertiesP != None:
+                message += "\nHost: " + str(thisHostT) +"\n" 
+                message += "\nFile Integrity has been compromised.\n" + \
+                "\nModified File Details: " + str(filePropertiesP) + "\n"
+                dataT['fileproperties'] = str(filePropertiesP)
 
-        if checkedFileP != None:
-            message +=  "\nDetected File Details: " + str(checkedFileP) + "\n"
-        
+            if checkedFileP != None:
+                message +=  "\nDetected File Details: " + str(checkedFileP) + "\n"
+                dataT['checkedfile'] = str(checkedFileP)
 
-        message += "\nError Message: " + str(errorMessageP) + "\n\n"        
+            message += "\nError Message: " + str(errorMessageP) + "\n\n"        
 
-        printInfo("\033[31;1;1m[-]\033[0m Sending Email...",1)
-        server.sendmail(sender_email, receiver_email, message)
+            dataT['error'] = str(errorMessageP)
+
+            printInfo("\033[31;1;1m[-]\033[0m Sending Email...",1)
+            server.sendmail(sender_email, receiver_email, message)
+
+        if paramsG.alertConfigM.slackWebHookM != None:
+            
+            send_slack_alert(dataT)
+
         # TODO: Send email here
     except Exception as e:
-        # print(any error messages to stdout
+        
         print(e)
     finally:
         server.quit() 
@@ -776,13 +969,12 @@ class IgnoreFile:
         self.ignoreFileListM = []
 
         self.ignoredFilesM = []
-        #self.rootPathM = rootPathP
 
         self.process()
 
     def setRootPath(self, rootPathP):
         printInfo(lineNum() + "\033[32;1;1m[+]\033[0m Ignoring Paths...",2)
-        #print lineNum() + str(rootPathP)
+        
         tempIgnorePathListT = []
         if rootPathP.endswith('/'):
             print lineNum(), rootPathP
@@ -795,43 +987,29 @@ class IgnoreFile:
             tempIgnorePathListT.append(newPathT)
             printDebugNoLock(lineNum() + newPathT, 3)
 
-            #print lineNum(), rootPathP, x, newPathT
-            #printInfo(x,1)
         self.ignorePathListM = tempIgnorePathListT
-        # printInfo(lineNum() + "[+] Ignoring Extensisons",1)
-        # for x in self.ignoreExtensionsListM:
-        #     printInfo(x,1)
         printInfo(lineNum() + "\033[32;1;1m[+]\033[0m Ignoring Files...",2)
         tempIgnoreFileListT = []
         for x in self.ignoreFileListM:
-        #     #print os.path.join(rootPathP, x)
-            #tempIgnoreFileListT = []
             if x[0] == '/':
                 newFilePathT = rootPathP + x
             else:
                 newFilePathT = x
 
-            #print lineNum(), rootPathP, x, newFilePathT
             tempIgnoreFileListT.append(newFilePathT)
             printDebugNoLock(lineNum() + newFilePathT, 3)
-            #printInfo(x,1)
         self.ignoreFileListM = tempIgnoreFileListT
-            #printInfo(x,1)
- 
+        
     ##
     # @todo: Add this to the getDirectoryFiles() function instead of the insitu code.
     #
     def checkIgnore(self, fileNameP):
-        #print lineNum() + fileNameP
-
-
+        
         foundIgnoreT = False
         for extensionT in self.ignoreExtensionsListM:
-            #print lineNum() + "Checking extension " + extensionT + " against file " + fileT
             if fileNameP.endswith(extensionT):
                 printDebugNoLock(lineNum() + "Found extension in ignore list ! Filename: " + fileNameP + " ends in " + str(extensionT) + ", Ignoring!!!", 2) # I'm not sure why we care.
                 foundIgnoreT = True
-                #ignoreFileG.ignoredFilesM.append(os.path.join(rootT, fileT))
                 break
         if foundIgnoreT == False:
             for ignoreT in self.ignoreFileListM:
@@ -842,8 +1020,7 @@ class IgnoreFile:
                     printDebugNoLock(lineNum() + "Found filename in ignore list ! Ignoring... " + str(ignoreT) + " : " + str(fileNameP),2)
                     foundIgnoreT = True
                     break
-                    #ignoreFileG.ignoredFilesM.append(os.path.join(rootT, fileT))
-
+        
         if foundIgnoreT == False:
             for ignoreT in ignoreFileG.ignorePathListM:
                 printDebugNoLock(lineNum() + ignoreT + " : " + fileNameP, 4)
@@ -854,21 +1031,13 @@ class IgnoreFile:
                     rootTempT = fileNameP + '/'
 
                 ignoreIndexT = string.find(fileNameP, ignoreT)
-                # if ignoreIndexT >= 0:
-                #     print lineNum() + str(ignoreIndexT)
                 if ignoreIndexT >= 0 and ignoreIndexT <= 3: # skip . chars.
                     printDebugNoLock(lineNum() + "Found path in ignore list ! Ignoring..." + str(ignoreT)  + " : " + fileNameP,2)
-                    #ignoreFileG.ignoredFilesM.append(fileNameP)
                     foundIgnoreT = True
                     break
 
         return foundIgnoreT
-        # for x in self.ignorePathListM:
-
-        # for x in self.ignoreFileListM:
-
-        # for x in self.ignoreExtensionsListM:
-
+        
 
     def process(self):
 
@@ -886,22 +1055,17 @@ class IgnoreFile:
             if os.path.isfile(self.ignoreFileM) == True:
                 openFileT = open(self.ignoreFileM,  'r')
                 if openFileT != None:
-                    #print lineNum()
                     linesT = openFileT.readlines() # Upto a million lines!
-                    #print lineNum()
                     if linesT != None:
                         #linesP += fileNameP # add the filename so we can pick up if files get moved.
-                        #returnHashT = hashlib.md5(linesP).hexdigest()
                         for lineT in linesT:
                             currentT = string.strip(str(lineT))
                             if lineT[0] == "!" or lineT[0] =='#' or len(str.strip(lineT)) == 0:
                                 printDebugNoLock(lineNum() + "starts with " + str(lineT[0]) , 4)
                                 printInfo("Line Ignored: " + str(lineT),4)
-                                #continue
                             elif lineT[0] == "*" and len(lineT) > 1:
                                 # This will be a blanket extension ignore.
                                 tempT = string.split(lineT,".")
-                                #print lineNum() + str(tempT[len(tempT) -1])
                                 extensionT = string.strip(str(tempT[len(tempT) -  1]))
                                 self.ignoreExtensionsListM.append(extensionT)
                                 printInfo("Extension added to ignore list: " + extensionT, 2)
@@ -911,7 +1075,6 @@ class IgnoreFile:
                                 self.ignorePathListM.append(directoryT)
                                 printInfo("Directory added to ignore list: " + str(directoryT), 2)
                             elif currentT[len(currentT)-1] == '/':
-                                #directoryT = string.split(lineT,"*")[0]
                                 self.ignorePathListM.append(currentT)
                                 printInfo("Directory added to ignore list: " + str(currentT), 2)
                             else:  
@@ -984,50 +1147,15 @@ def getAllFilesInDirectory(dirP, maxDepthP):
             print(">")
         printInfo(lineNum() + "Get all files in: " + dirP, 4)
         dailyDirsStructT = os.walk(dirP, followlinks=False)
-        #print lineNum(), dirP, str(dailyDirsStructT)
-        #exit()
         dailyDirsT = [] # The directory names returned from os.walk
         rootT = ''
         for rootT, dailyDirsT, filesT in dailyDirsStructT:
-            #print lineNum(), rootT, dailyDirsT, filesT
-            #exit()
             foundIgnoreT = False
             if os.path.islink(rootT):
                 printDebugNoLock("%s%s %s : %s" % (lineNum(), "Link file hit!: ", rootT, os.path.isfile(rootT)), 1)
                 continue
-            #print lineNum(), "before fore..."
 
             foundIgnoreT = ignoreFileG.checkIgnore(rootT)
-
-            # for ignoreT in ignoreFileG.ignorePathListM:
-            #     printDebugNoLock(lineNum() + ignoreT + " : " + rootT, 3)
-            #     rootTempT = ''
-            #     if rootT.endswith('/'):
-            #         rootTempT = rootT
-            #     else:
-            #         rootTempT = rootT + '/'
-
-            #     #print lineNum(), rootTempT, ignoreT
-            #     ignoreIndexT = string.find(rootTempT, ignoreT)
-            #     # if ignoreIndexT >= 0:
-            #     #     print lineNum() + str(ignoreIndexT)
-            #     if ignoreIndexT >= 0 and ignoreIndexT <= 3: # skip . chars.
-            #         printDebugNoLock(lineNum() + "Found it ! Ignoring: " + str(ignoreT)  + " : " + str(rootT),3)
-            #         ignoreFileG.ignoredFilesM.append(rootT)
-            #         foundIgnoreT = True
-            #         #print lineNum(), "about to break"
-            #         break
-
-            # #print lineNum(), "after break"
-            # if foundIgnoreT == False:
-            #     for ignoreT in ignoreFileG.ignoreFileListM:
-            #         # print lineNum(), ignoreT, rootT
-            #         ignoreIndexT = string.find(rootT, ignoreT)
-            #         if ignoreIndexT >= 0 and ignoreIndexT <= 3: # skip . chars.
-            #             printDebugNoLock(lineNum() + "Found it ! Ignoring: " + str(ignoreT) + " : " + str(rootT),1)
-            #             ignoreFileG.ignoredFilesM.append(rootT)
-            #             foundIgnoreT = True
-            #             break
 
             if len(filesT) == 1:
                 printDebugNoLock(lineNum() + os.path.join(rootT), 4)
@@ -1036,50 +1164,11 @@ def getAllFilesInDirectory(dirP, maxDepthP):
                 if len(globFilesT) == 1:
                     printDebugNoLock(lineNum() + "Globs: " + os.path.join(rootT, globFilesT[0]), 3)
 
-
                     if foundIgnoreT == False:
                         foundIgnoreT = ignoreFileG.checkIgnore(os.path.join(rootT, globFilesT[0]))
 
-                    # #foundIgnoreT = False
-                    # for extensionT in ignoreFileG.ignoreExtensionsListM:
-                    #     #print lineNum() + "Checking extension " + extensionT + " against file " + fileT
-                    #     if globFilesT[0].endswith(extensionT):
-                    #         printDebugNoLock(lineNum() + "Found it ! Filename: " + globFilesT[0] + " ends in " + str(extensionT) + ", Ignoring!!!", 1) # I'm not sure why we care.
-                    #         foundIgnoreT = True
-                    #         ignoreFileG.ignoredFilesM.append(os.path.join(rootT, globFilesT[0]))
-
-                    # if foundIgnoreT == False:
-                    #     for ignoreT in ignoreFileG.ignoreFileListM:
-                    #         #print lineNum(), ignoreT, rootT
-                    #         ignoreIndexT = string.find(os.path.join(rootT, globFilesT[0]), ignoreT)
-                    #         if ignoreIndexT >= 0 and ignoreIndexT <= 3: # skip . chars.
-                    #             printDebugNoLock(lineNum() + "Found it ! Ignoring... " + str(ignoreT) + " : " + str(os.path.join(rootT, globFilesT[0])),1)
-                    #             foundIgnoreT = True
-                    #             ignoreFileG.ignoredFilesM.append(os.path.join(rootT, globFilesT[0]))
-
-                    # if foundIgnoreT == False:
-                    #     returnFileListT.append(globFilesT[0])
-
                 if foundIgnoreT == False:
                     foundIgnoreT = ignoreFileG.checkIgnore(os.path.join(rootT, filesT[0]))
-
-                # #foundIgnoreT = False
-                # if foundIgnoreT == False:
-                #     for extensionT in ignoreFileG.ignoreExtensionsListM:
-                #         #print lineNum() + "Checking extension " + extensionT + " against file " + fileT
-                #         if filesT[0].endswith(extensionT):
-                #             printDebugNoLock(lineNum() + "Found it ! Filename : " + filesT[0] + " ends in " + str(extensionT) + ", Ignoring!!!", 1) # I'm not sure why we care.
-                #             foundIgnoreT = True
-                #             ignoreFileG.ignoredFilesM.append(os.path.join(rootT, filesT[0]))
-
-                # if foundIgnoreT == False:
-                #     for ignoreT in ignoreFileG.ignoreFileListM:
-                #         #print lineNum(), ignoreT, rootT, filesT[0], os.path.join(rootT, filesT[0])
-                #         ignoreIndexT = string.find(os.path.join(rootT, filesT[0]), ignoreT)
-                #         if ignoreIndexT >= 0 and ignoreIndexT <= 3: # skip . chars.
-                #             printDebugNoLock(lineNum() + "Found it ! Ignoring... " + str(ignoreT) + " : " + str(os.path.join(rootT, filesT[0])),1)
-                #             foundIgnoreT = True
-                #             ignoreFileG.ignoredFilesM.append(os.path.join(rootT, filesT[0]))
 
                 if foundIgnoreT == False:
                     returnFileListT.append(os.path.join(rootT, filesT[0]))
@@ -1110,57 +1199,13 @@ def getAllFilesInDirectory(dirP, maxDepthP):
                         if isFifoT == 0:
                              printDebugNoLock("%s%s %s : %s : %s" % (lineNum(), "Sock file hit!: ", os.path.join(rootT,fileT), os.path.isfile(rootT), str(isFifoT)),1)
 
-                    #foundIgnoreT = False
-
                     if foundIgnoreT == False:
                         foundIgnoreT = ignoreFileG.checkIgnore(os.path.join(rootT, fileT))
-
-                    # for extensionT in ignoreFileG.ignoreExtensionsListM:
-                    #     #print lineNum() + "Checking extension " + extensionT + " against file " + fileT
-                    #     if fileT.endswith(extensionT):
-                    #         printDebugNoLock(lineNum() + "Found it ! Filename: " + fileT + " ends in " + str(extensionT) + ", Ignoring!!!", 1) # I'm not sure why we care.
-                    #         foundIgnoreT = True
-                    #         print lineNum(), rootT, fileT, os.path.join(rootT,fileT)
-                    #         ignoreFileG.ignoredFilesM.append(os.path.join(rootT, fileT))
-
-                    # if foundIgnoreT == False:
-                    #     for ignoreT in ignoreFileG.ignoreFileListM:
-
-                    #         printDebugNoLock(lineNum() + ignoreT + " : " +  os.path.join(rootT, fileT),3)
-
-                    #         ignoreIndexT = string.find(os.path.join(rootT, fileT), ignoreT)
-                    #         if ignoreT == os.path.join(rootT, fileT):
-                    #         #if ignoreIndexT >= 0 and ignoreIndexT <= 3: # skip . chars.
-                    #             printDebugNoLock(lineNum() + "Found it ! Ignoring: " + str(ignoreT) + " : " + str(os.path.join(rootT, fileT)),1)
-                    #             foundIgnoreT = True
-                    #             ignoreFileG.ignoredFilesM.append(os.path.join(rootT, fileT))
-
-                    # if foundIgnoreT == False:
-                    #     for ignoreT in ignoreFileG.ignorePathListM:
-                    #         printDebugNoLock(lineNum() + ignoreT + " : " + rootT, 3)
-                    #         rootTempT = ''
-                    #         if rootT.endswith('/'):
-                    #             rootTempT = rootT
-                    #         else:
-                    #             rootTempT = rootT + '/'
-
-                    #         ignoreIndexT = string.find(rootTempT, ignoreT)
-                    #         # if ignoreIndexT >= 0:
-                    #         #     print lineNum() + str(ignoreIndexT)
-                    #         #print lineNum(), rootTempT, ignoreT
-                    #         if ignoreIndexT >= 0 and ignoreIndexT <= 3: # skip . chars.
-                    #             printDebugNoLock(lineNum() + "Found it ! Ignoring: " + str(ignoreT)  + " : " + str(os.path.join(rootT, fileT)),3)
-                    #             ignoreFileG.ignoredFilesM.append(os.path.join(rootT, fileT))
-                    #             foundIgnoreT = True
 
                     if foundIgnoreT == False:
                         returnFileListT.append(os.path.join(rootT, fileT))
 
             printDebugNoLock(lineNum() + str(dailyDirsT), 5)
-
-                    
-
-                    #returnFileListT.append(os.path.join(rootT, fileT))
 
             if len(dailyDirsT) > 0:
                 for subDirsT in dailyDirsT:
@@ -1214,7 +1259,6 @@ def auditFileHashes(listOfFilesP):
         lineCount = 0
         paramsG.usingStdin = True
         printInfo("\033[31;1;1m[-]\033[0m Error: No input file ", 1)
-        #getAndCheckHashFromFile()
     else:
 
         fileCounterT = 0
@@ -1317,17 +1361,6 @@ def processCommandLine(fileNameP):
                 printInfo("\033[32;1;1m[+]\033[0m Ignore filename set to: " + str(sys.argv[currentParamT + 1]),1)
                 ignoreFileNameT = sys.argv[currentParamT + 1]
 
-                #listOfFilesT = []
-                #listOfFilesT.append(ignoreFileNameT)
-                
-                #splitFileNameT = string.split(ignoreFileNameT, ".")
-                #tempT = None
-                #temp2T = None
-                #This loop will append everything except the last field... ie the extention.
-                # could've done for x in xrange(0,len(splitFileNameT)): also. 
-                #print lineNum() + str(ignoreFileNameT)
-                #print lineNum() + str(splitFileNameT)
-                
                 ignoreFileG = IgnoreFile(ignoreFileNameT)
 
                 ignoreFileG.outputLists()
@@ -1348,8 +1381,6 @@ def processCommandLine(fileNameP):
                 currentParamT += 1
 
                 skipT = 1
-                ##d = os.path.dirname(paramsG.outputDirectoryM)
-                ##printDebugNoLock(lineNum() + str(d),1)
                 if not os.path.exists(paramsG.outputDirectoryM):
                     os.makedirs(paramsG.outputDirectoryM)
                 else:
@@ -1451,7 +1482,6 @@ def processCommandLine(fileNameP):
 
             if len(sys.argv[1:]) > currentParamT:
                 try:
-                    #print(lineNum(), currentParamT, sys.argv[currentParamT], sys.argv[currentParamT+1])
                     paramsG.loggingM = int(sys.argv[currentParamT+1])
                     currentParamT += 1
                     skipT = 1
@@ -1549,8 +1579,6 @@ def processCommandLine(fileNameP):
         fileNameP = string.replace(fileNameP,':',"_")
         fileNameT = fileNameP
 
-    #printDebugNoLock(lineNum() + str(fileNameT) + " : " + str(listOfFilesT), 10)
-
     return  fileNameT, listOfFilesT, topLevelDirT
 
 
@@ -1567,14 +1595,25 @@ def main():
     fileNameT = None
     
 
-    fileNameT, listOfFilesT, topLevelDirT = processCommandLine(fileNameT)
+    alertConfigFileT = outputFilesG.openAlertConfigFile()
 
-    #print lineNum(), fileNameT, listOfFilesT, topLevelDirT
+    if outputFilesG.alertConfigFileM != None:
+        printInfo('Loading Alert Config File: ' + "alertconfig.cfg",2)
+
+        outputFilesG.loadAlertConfigFile()
+
+    else:
+        printInfo('Couldn\'t open alertconfig.cfg. Exiting...',1)
+        sys.exit()
+
+    fileNameT, listOfFilesT, topLevelDirT = processCommandLine(fileNameT)
 
     outputFilesG.setFileNamePrefix(fileNameT) # set the prefix of the output files generated.
     outputFilesG.determineFilenamePrefix()
     outputFilesG.determineOutputDirectory()
     outputFilesG.determineNoClobberValue()
+
+    paramsG.alertConfigM.DisplayProfile()
 
     if listOfFilesT != None:
     
@@ -1588,8 +1627,6 @@ def main():
         retValT = True
     elif paramsG.checkHashesM == True:
         while(1==1):
-            #listOfFilesT = fileListG
-            #printInfo("[+] Reading Hashes...",1)
             checkHashes(listOfFilesT)
             printInfo("\033[32;1;1m[+]\033[0m Checking Hashes...",1)
             auditFileHashes(listOfFilesT)
@@ -1599,7 +1636,6 @@ def main():
             time.sleep(paramsG.monitorModeSleepM)
             # Need to rebuild the file list, just in case a file has appeared.
             listOfFilesT, topLevelDirT = getAllFilesInDirectory(topLevelDirT, paramsG.maxDepthM)
-            #printDebugNoLock(lineNum() + str(listOfFilesT),1)
             printDebugNoLock(lineNum() + str(topLevelDirT),4)
         retValT = True
     else:
@@ -1619,7 +1655,6 @@ if __name__ == "__main__":
         printInfo("\033[32;1;1m[+]\033[0m Done!", 1)
     else:
         printInfo("\033[31;1;1m[-]\033[0m *** Processing Error!!!! ***\n ", 1)
-        #printDebugNoLock("\n *** Processing Error!!!! ***\n", 1)
 
 
 
