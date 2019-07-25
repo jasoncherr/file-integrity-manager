@@ -30,14 +30,14 @@ yearG = "16th July 2019"
 import stat, os
 import sys
 import re
-
+#from pathlib import Path
 import string
 import time
 import datetime
 import glob
 import base64
 
-import requests
+import requests     # For Slack Notifications.
 #import threading	# For threading.
 import inspect 		# For debugging line numbers.
 
@@ -119,6 +119,8 @@ class AlertConfig:
 
         self.slackWebHookM = None
 
+        self.environmentM = None
+
     
     def DisplayProfile(self):
             
@@ -130,11 +132,12 @@ class AlertConfig:
         printInfo("",1)
         printInfo("Slack Web Hook : " + str(self.slackWebHookM),1)
         printInfo("",1)
+        printInfo("Environment.   : " + str(self.environmentM),1)
 
 
     def __str__(self):
 
-        return str(self.SMTPportM) + " : " + str(self.smtpPasswordM) + " : " + str(self.smtpServerM) + " : " + str(self.senderEmailM) + " : " + str(self.receiverEmailM) + " : " + str(self.slackWebHookM)
+        return str(self.SMTPportM) + " : " + str(self.smtpPasswordM) + " : " + str(self.smtpServerM) + " : " + str(self.senderEmailM) + " : " + str(self.receiverEmailM) + " : " + str(self.slackWebHookM) + " : " + str(self.environmentM)
 
 
 
@@ -521,7 +524,11 @@ class OutputFileHelper:
 
     def openAlertConfigFile(self):
 
-        testT = os.path.join(os.path.dirname(__file__) + '/' + self.listOfDefaultPrefixesT[1] + '.cfg')
+        #print lineNum(), os.path.realpath(__file__)
+        if len(os.path.dirname(os.path.realpath(__file__))) == 0: 
+            testT = os.path.expanduser(os.path.join('~/' + self.listOfDefaultPrefixesT[1] + '.cfg'))
+        else:
+            testT = os.path.join(os.path.dirname(os.path.realpath(__file__)) + '/' + self.listOfDefaultPrefixesT[1] + '.cfg')
         
         printDebugNoLock(lineNum() + "Opening File: " + testT , 2)
 
@@ -562,6 +569,8 @@ class OutputFileHelper:
                         currentProfileT.receiverEmailM = str.strip(lineT[1])
                     elif tagT == 'SlackWebHook':
                         currentProfileT.slackWebHookM = str.strip(lineT[1])
+                    elif tagT == 'Environment':
+                        currentProfileT.environmentM = str.strip(lineT[1])
 
 
             
@@ -570,7 +579,7 @@ class OutputFileHelper:
 
     def openLogFileOld(self):
 
-        testT = os.path.join(os.getcwd(), time.strftime('%Y%m%d_%H%M%S_') + 'debugLog' + '.log')
+        testT = os.path.join(os.getcwd(), time.strftime('%Y%m%d_%H%M%S_') + 'fimlog' + '.log')
 
         try:
             logFileT = open(testT, 'w')
@@ -578,7 +587,7 @@ class OutputFileHelper:
             printDebugNoLock(lineNum() + "Logging to file: " + str(testT), 4)
         except IOError as fileOpenException:
             paramsG.logFileM = None
-            print(lineNum(), "I/O error({0}): {1}".format(fileOpenException.errno, fileOpenException.strerror))
+            printDebugNoLock(lineNum(), "I/O error({0}): {1}".format(fileOpenException.errno, fileOpenException.strerror),1)
 
         return logFileT
 
@@ -777,6 +786,11 @@ def send_slack_alert(dataP, context=None):
                                     "short": "false"\
                                     },\
                                     {\
+                                    "title": "environment",\
+                                    "value": str(dataP['environment']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
                                     "title": "message",\
                                     "value": str(dataP['message']),\
                                     "short": "false"\
@@ -796,6 +810,64 @@ def send_slack_alert(dataP, context=None):
                                     "value": str(dataP['error']),\
                                     "short": "false"\
                                     }\
+                                    ],\
+                         "ts":  str(time.time())\
+                         }\
+                         ]\
+        }
+
+
+    responseT = requests.post(
+                             webhook_urlT, data=json.dumps(slack_dataT),
+                             headers={'Content-Type': 'application/json'}
+                             )
+
+    if responseT.status_code != 200:
+        raise ValueError(
+                         'Request to slack returned an error %s, the response is:\n%s'
+                         % (responseT.status_code, responseT.text)
+                         )
+
+##
+# Send message to slack
+#
+def send_slack_notification(dataP, context=None):
+    
+    webhook_urlT = paramsG.alertConfigM.slackWebHookM
+    printInfo(webhook_urlT,2)
+
+    thisHostT = paramsG.thisHostM      
+
+    printInfo("\033[32;1;1m[+]\033[0m Sending Slack Started Notification...",1)
+
+    slack_dataT = {'text': "File Integrity Monitor is running: " + str(thisHostT), \
+        "attachments":  [ \
+                         { \
+                         "fallback": "", \
+                         "color": "#78281F",\
+                         "pretext": "",\
+                         "author_name": "Data Source: File Integrity Manager",\
+                         "author_link": "",\
+                         "author_icon": "",\
+                         "title": "",\
+                         "title_link": "",\
+                         "text": "",\
+                         "fields": [\
+                                    {\
+                                    "title": "host",\
+                                    "value": str(dataP['host']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
+                                    "title": "environment",\
+                                    "value": str(dataP['environment']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
+                                    "title": "message",\
+                                    "value": str(dataP['message']),\
+                                    "short": "false"\
+                                    } \
                                     ],\
                          "ts":  str(time.time())\
                          }\
@@ -845,11 +917,12 @@ def raiseAlert(filePropertiesP, errorMessageP, checkedFileP = None):
     
     thisHostT = paramsG.thisHostM
 
-    dataT = {"host":"","message":"",'fileproperties':'','checkedfile':"",'error':""}
+    dataT = {"host":"","environment":"","message":"",'fileproperties':'','checkedfile':"",'error':""}
 
     printDebugNoLock(lineNum() + str(thisHostT),4)
 
     dataT['host'] = thisHostT
+    dataT['environment'] = paramsG.alertConfigM.environmentM
     server = smtplib.SMTP_SSL(smtp_server,portT)
 
     try:
@@ -859,10 +932,12 @@ def raiseAlert(filePropertiesP, errorMessageP, checkedFileP = None):
             message = " Subject: Possible File Integrity Compromise Detected on " + str(thisHostT) + \
             "\n\n\n"
 
-            dataT['message'] = message
+            message += "\nHost: " + str(thisHostT) +"\n" 
+            message += "\nEnvironment: " + str(paramsG.alertConfigM.environmentM) + "\n"
+            
 
             if filePropertiesP != None:
-                message += "\nHost: " + str(thisHostT) +"\n" 
+                
                 message += "\nFile Integrity has been compromised.\n" + \
                 "\nModified File Details: " + str(filePropertiesP) + "\n"
                 dataT['fileproperties'] = str(filePropertiesP)
@@ -872,6 +947,7 @@ def raiseAlert(filePropertiesP, errorMessageP, checkedFileP = None):
                 dataT['checkedfile'] = str(checkedFileP)
 
             message += "\nError Message: " + str(errorMessageP) + "\n\n"        
+            dataT['message'] = message
 
             dataT['error'] = str(errorMessageP)
 
@@ -888,6 +964,72 @@ def raiseAlert(filePropertiesP, errorMessageP, checkedFileP = None):
         print(e)
     finally:
         server.quit() 
+
+
+def startedNotification():
+    
+    portT = paramsG.alertConfigM.smtpPortM # for SSL
+    emailPasswordT = paramsG.alertConfigM.smtpPasswordM
+
+    context = ssl.create_default_context()
+    
+    smtp_server=paramsG.alertConfigM.smtpServerM
+    
+    sender_email=paramsG.alertConfigM.senderEmailM
+    receiver_email=paramsG.alertConfigM.receiverEmailM
+    
+    thisHostT = paramsG.thisHostM
+
+    dataT = {"host":"","environment":"","message":""}
+
+    printDebugNoLock(lineNum() + str(thisHostT),4)
+
+    dataT['host'] = thisHostT
+    dataT['environment'] = paramsG.alertConfigM.environmentM
+
+    server = smtplib.SMTP_SSL(smtp_server,portT)
+
+    try:
+        if paramsG.alertConfigM.senderEmailM != None:
+            server.login(sender_email, emailPasswordT)
+
+            message = " Subject: File Integrity Monitor started on " + str(thisHostT) + \
+            "\n\n\n"
+
+            #dataT['message'] = message
+
+            #if filePropertiesP != None:
+            message += "\nHost: " + str(thisHostT) +"\n"
+            message += "\nEnvironment: " + str(paramsG.alertConfigM.environmentM) + "\n"
+            message += "\nFile Integrity monitor has been started with a " + str(paramsG.monitorModeSleepM) + " second polling period.\n" 
+
+                #"\nModified File Details: " + str(filePropertiesP) + "\n"
+                #dataT['fileproperties'] = str(filePropertiesP)
+
+            # if checkedFileP != None:
+            #     message +=  "\nDetected File Details: " + str(checkedFileP) + "\n"
+            #     dataT['checkedfile'] = str(checkedFileP)
+
+            #message += "\nError Message: " + str(errorMessageP) + "\n\n"        
+
+            #dataT['error'] = str(errorMessageP)
+            dataT['message'] = message
+
+            #printInfo("\033[32;1;1m[+]\033[0m 
+            printInfo("\033[32;1;1m[+]\033[0m Sending Email Started Notification...",1)
+            server.sendmail(sender_email, receiver_email, message)
+
+        if paramsG.alertConfigM.slackWebHookM != None:
+            
+            send_slack_notification(dataT)
+
+        # TODO: Send email here
+    except Exception as e:
+        
+        print(e)
+    finally:
+        server.quit() 
+
 
 
 
@@ -973,7 +1115,7 @@ class IgnoreFile:
         self.process()
 
     def setRootPath(self, rootPathP):
-        printInfo(lineNum() + "\033[32;1;1m[+]\033[0m Ignoring Paths...",2)
+        printInfo(lineNum() + "\033[32;1;1m[+]\033[0m Reading Path to Ignore...",2)
         
         tempIgnorePathListT = []
         if rootPathP.endswith('/'):
@@ -988,7 +1130,7 @@ class IgnoreFile:
             printDebugNoLock(lineNum() + newPathT, 3)
 
         self.ignorePathListM = tempIgnorePathListT
-        printInfo(lineNum() + "\033[32;1;1m[+]\033[0m Ignoring Files...",2)
+        printInfo(lineNum() + "\033[32;1;1m[+]\033[0m Reading the Files to Ignore...",2)
         tempIgnoreFileListT = []
         for x in self.ignoreFileListM:
             if x[0] == '/':
@@ -1597,6 +1739,7 @@ def main():
 
     alertConfigFileT = outputFilesG.openAlertConfigFile()
 
+
     if outputFilesG.alertConfigFileM != None:
         printInfo('Loading Alert Config File: ' + "alertconfig.cfg",2)
 
@@ -1626,6 +1769,7 @@ def main():
         generateHashes(listOfFilesT)
         retValT = True
     elif paramsG.checkHashesM == True:
+        startedNotification()
         while(1==1):
             checkHashes(listOfFilesT)
             printInfo("\033[32;1;1m[+]\033[0m Checking Hashes...",1)
