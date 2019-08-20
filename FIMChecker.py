@@ -120,6 +120,7 @@ class AlertConfig:
         self.slackWebHookM = None
 
         self.environmentM = None
+        self.projectM = None
 
     
     def DisplayProfile(self):
@@ -132,12 +133,13 @@ class AlertConfig:
         printInfo("",1)
         printInfo("Slack Web Hook : " + str(self.slackWebHookM),1)
         printInfo("",1)
-        printInfo("Environment.   : " + str(self.environmentM),1)
+        printInfo("Environment    : " + str(self.environmentM),1)
+        printInfo("Project        : " + str(self.projectM),1)
 
 
     def __str__(self):
 
-        return str(self.SMTPportM) + " : " + str(self.smtpPasswordM) + " : " + str(self.smtpServerM) + " : " + str(self.senderEmailM) + " : " + str(self.receiverEmailM) + " : " + str(self.slackWebHookM) + " : " + str(self.environmentM)
+        return str(self.SMTPportM) + " : " + str(self.smtpPasswordM) + " : " + str(self.smtpServerM) + " : " + str(self.senderEmailM) + " : " + str(self.receiverEmailM) + " : " + str(self.slackWebHookM) + " : " + str(self.environmentM) + " : " + str(self.projectM)
 
 
 
@@ -571,6 +573,8 @@ class OutputFileHelper:
                         currentProfileT.slackWebHookM = str.strip(lineT[1])
                     elif tagT == 'Environment':
                         currentProfileT.environmentM = str.strip(lineT[1])
+                    elif tagT == 'Project':
+                        currentProfileT.projectM = str.strip(lineT[1])
 
 
             
@@ -791,6 +795,11 @@ def send_slack_alert(dataP, context=None):
                                     "short": "false"\
                                     },\
                                     {\
+                                    "title": "project",\
+                                    "value": str(dataP['project']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
                                     "title": "message",\
                                     "value": str(dataP['message']),\
                                     "short": "false"\
@@ -864,6 +873,11 @@ def send_slack_notification(dataP, context=None):
                                     "short": "false"\
                                     },\
                                     {\
+                                    "title": "project",\
+                                    "value": str(dataP['project']),\
+                                    "short": "false"\
+                                    },\
+                                    {\
                                     "title": "message",\
                                     "value": str(dataP['message']),\
                                     "short": "false"\
@@ -917,12 +931,14 @@ def raiseAlert(filePropertiesP, errorMessageP, checkedFileP = None):
     
     thisHostT = paramsG.thisHostM
 
-    dataT = {"host":"","environment":"","message":"",'fileproperties':'','checkedfile':"",'error':""}
+    dataT = {"host":"","environment":"","project":"","message":"",'fileproperties':'','checkedfile':"",'error':""}
 
     printDebugNoLock(lineNum() + str(thisHostT),4)
 
     dataT['host'] = thisHostT
     dataT['environment'] = paramsG.alertConfigM.environmentM
+    dataT['project'] = paramsG.alertConfigM.projectM
+
     server = smtplib.SMTP_SSL(smtp_server,portT)
 
     try:
@@ -934,6 +950,7 @@ def raiseAlert(filePropertiesP, errorMessageP, checkedFileP = None):
 
             message += "\nHost: " + str(thisHostT) +"\n" 
             message += "\nEnvironment: " + str(paramsG.alertConfigM.environmentM) + "\n"
+            message += "\nProject: " + str(paramsG.alertConfigM.projectM) + "\n"
             
 
             if filePropertiesP != None:
@@ -980,12 +997,13 @@ def startedNotification():
     
     thisHostT = paramsG.thisHostM
 
-    dataT = {"host":"","environment":"","message":""}
+    dataT = {"host":"","environment":"","project":"","message":""}
 
     printDebugNoLock(lineNum() + str(thisHostT),4)
 
     dataT['host'] = thisHostT
     dataT['environment'] = paramsG.alertConfigM.environmentM
+    dataT['project'] = paramsG.alertConfigM.projectM
 
     server = smtplib.SMTP_SSL(smtp_server,portT)
 
@@ -1001,6 +1019,7 @@ def startedNotification():
             #if filePropertiesP != None:
             message += "\nHost: " + str(thisHostT) +"\n"
             message += "\nEnvironment: " + str(paramsG.alertConfigM.environmentM) + "\n"
+            message += "\nProject: " + str(paramsG.alertConfigM.projectM) + "\n"
             message += "\nFile Integrity monitor has been started with a " + str(paramsG.monitorModeSleepM) + " second polling period.\n" 
 
                 #"\nModified File Details: " + str(filePropertiesP) + "\n"
@@ -1019,17 +1038,30 @@ def startedNotification():
             printInfo("\033[32;1;1m[+]\033[0m Sending Email Started Notification...",1)
             server.sendmail(sender_email, receiver_email, message)
 
-        if paramsG.alertConfigM.slackWebHookM != None:
+    except Exception as e:
+        printDebugNoLock(lineNum() + str(e), 2)
+    finally:
+        try:
+            server.quit() 
+        except Exception as e2:
+            printInfo("\033[31;1;1m[-]\033[0m Problem Connecting to email server: " + str(smtp_server) + ".",1)
+            printInfo("\033[31;1;1m[-]\033[0m Error: " + str(e2),1)
+
+    try:
+        #if paramsG.alertConfigM.slackWebHookM != None:
             
-            send_slack_notification(dataT)
+         send_slack_notification(dataT)
 
         # TODO: Send email here
     except Exception as e:
-        
-        print(e)
+        printDebugNoLock(lineNum() + str(e), 2)
     finally:
-        server.quit() 
-
+        try:
+            #server.quit()
+            pass
+        except Exception as e2:
+            printInfo("\033[31;1;1m[-]\033[0m Problem Connecting to email server: " + str(smtp_server) + ".",1)
+            printInfo("\033[31;1;1m[-]\033[0m Error: " + str(e2),1)
 
 
 
